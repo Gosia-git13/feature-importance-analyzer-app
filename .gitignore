@@ -1,0 +1,13 @@
+# śmieci systemowe i Pythona
+.DS_Store
+__pycache__/
+.ipynb_checkpoints/
+
+# pliki generowane przez PyCaret / modele
+*.pkl
+logs.log
+catboost_info/
+
+# dane (CSV nie trzymamy w repo)
+data/
+dev/
