@@ -1,0 +1,8 @@
+pycaret==3.3.2
+scikit-learn==1.4.2
+pandas==1.5.3
+numpy==1.26.4
+pyarrow==16.1.0
+streamlit==1.43.2
+protobuf==5.29.6
+openai==1.107.1
