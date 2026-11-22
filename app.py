@@ -66,6 +66,10 @@ if df.empty:
 # -------------------------------------------------------------------------------
 # Main flow
 # -------------------------------------------------------------------------------
+
+# -------------------------------------------------------------------------------
+# Data preview (v1)
+# -------------------------------------------------------------------------------
 st.success(f"File **{uploaded_file.name}** loaded successfully!")
 
 col_rows, col_cols = st.columns(2)
@@ -74,3 +78,57 @@ col_cols.metric("Columns", df.shape[1])
 
 st.subheader(f"Preview: first {PREVIEW_ROWS} rows")
 st.dataframe(df.head(PREVIEW_ROWS), use_container_width=True, hide_index=True)
+
+# -------------------------------------------------------------------------------
+# Target column selection (v2)
+# -------------------------------------------------------------------------------
+st.divider()
+st.subheader("🎯 Choose the target column")
+st.caption(
+    "The target is the column you want to predict. "
+    "All other columns will be used as features."
+)
+
+if df.shape[1] < 2:
+    st.error("The file needs at least 2 columns: one target and at least one feature.")
+    st.stop()
+
+target = st.selectbox(
+    "Target column",
+    options=df.columns.tolist(),
+    index=None,
+    placeholder="Select a column...",
+)
+
+if target is None:
+    st.info("👆 Select the column you want to predict.")
+    st.stop()
+
+target_series = df[target]
+n_unique = target_series.nunique(dropna=True)
+n_missing = int(target_series.isna().sum())
+
+col_type, col_unique, col_missing = st.columns(3)
+col_type.metric("Data type", str(target_series.dtype))
+col_unique.metric("Unique values", f"{n_unique:,}")
+col_missing.metric("Missing values", f"{n_missing:,}")
+
+if n_unique < 2:
+    st.error(
+        "The target column has fewer than 2 distinct values, so there is nothing "
+        "to predict. Please choose another column."
+    )
+    st.stop()
+
+if n_missing > 0:
+    st.warning(
+        f"Rows without a target value: {n_missing:,} ({n_missing / len(df):.1%}). "
+        "They will be removed before model training."
+    )
+
+feature_columns = [col for col in df.columns if col != target]
+
+st.success(f"Target: **{target}** · Features: **{len(feature_columns)}** columns")
+
+with st.expander("Show feature columns"):
+    st.write(", ".join(feature_columns))
