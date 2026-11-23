@@ -4,6 +4,7 @@ import io
 import pandas as pd
 import streamlit as st
 
+
 # -------------------------------------------------------------------------------
 # Page settings
 # -------------------------------------------------------------------------------
@@ -20,6 +21,15 @@ TIME_MATCH_SHARE = 0.9  # >= 90% of values must look like a time
 # "utf-8-sig" reads normal UTF-8 and also UTF-8 files saved by Excel (with a BOM);
 # "latin-1" is a fallback for older European files.
 ENCODINGS = ("utf-8-sig", "latin-1")
+
+# Problem type detection (v3)
+PROBLEM_TYPES = ["classification", "regression"]
+CLASSIFICATION_MAX_UNIQUE = 20  # whole numbers with <= 20 distinct values -> classes
+TOP_CLASSES_IN_CHART = 20
+MIN_ROWS_PER_CLASS = 2          # model training needs at least 2 examples per class
+IMBALANCE_THRESHOLD = 0.05      # smallest class below 5% of rows -> imbalanced
+MAX_CLASSES = 50
+
 
 # -------------------------------------------------------------------------------
 # Helpers
@@ -69,6 +79,43 @@ def load_csv(file_bytes: bytes) -> pd.DataFrame:
             continue  # if wrong encoding try the next one
     raise ValueError("Could not decode the file. Please save it as UTF-8.")
 
+
+def detect_problem_type(target: pd.Series) -> tuple[str, str]:
+    """Guess whether predicting `target` is classification or regression.
+
+    Returns the problem type and a short, human-readable reason.
+    """
+    values = target.dropna()
+    n_unique = values.nunique()
+
+    # bool must be checked first: pandas treats True/False as numbers too
+    if pd.api.types.is_bool_dtype(values) or not pd.api.types.is_numeric_dtype(values):
+        return "classification", "it contains text or yes/no values"
+
+    if (values % 1 != 0).any():
+        return "regression", "it contains decimal numbers"
+
+    if n_unique <= CLASSIFICATION_MAX_UNIQUE:
+        return "classification", f"it has only {n_unique} distinct whole-number values"
+
+    return "regression", f"it has many ({n_unique:,}) distinct numeric values"
+
+
+def format_share(share: float) -> str:
+    """Format a fraction as a percentage; show '<0.1%' instead of a misleading '0.0%'."""
+    if 0 < share < 0.001:
+        return "<0.1%"
+    return f"{share:.1%}"
+
+
+def format_duration(seconds: float) -> str:
+    """Format a number of seconds as HH:MM:SS, e.g. 3899 -> '01:04:59'."""
+    seconds = int(round(seconds))
+    hours, rest = divmod(seconds, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
 # -------------------------------------------------------------------------------
 # Load data
 # -------------------------------------------------------------------------------
@@ -96,9 +143,6 @@ if df.empty:
 
 df, converted_time_columns = convert_time_columns(df)
 
-# -------------------------------------------------------------------------------
-# Main flow
-# -------------------------------------------------------------------------------
 
 # -------------------------------------------------------------------------------
 # Data preview (v1)
@@ -125,6 +169,7 @@ col_cols.metric("Columns", df.shape[1])
 
 st.subheader(f"Preview: first {PREVIEW_ROWS} rows")
 st.dataframe(df.head(PREVIEW_ROWS), use_container_width=True, hide_index=True)
+
 
 # -------------------------------------------------------------------------------
 # Target column selection (v2)
@@ -169,8 +214,8 @@ if n_unique < 2:
 
 if n_missing > 0:
     st.warning(
-        f"Rows without a target value: {n_missing:,} ({n_missing / len(df):.1%}). "
-        "They will be removed before model training."
+        f"Rows without a target value: {n_missing:,} ({format_share(n_missing / len(df))}). "
+    "They will be removed before model training."
     )
 
 feature_columns = [col for col in df.columns if col != target]
@@ -179,3 +224,85 @@ st.success(f"Target: **{target}** · Features: **{len(feature_columns)}** column
 
 with st.expander("Show feature columns"):
     st.write(", ".join(feature_columns))
+
+
+# -------------------------------------------------------------------------------
+# Problem type: classification or regression (v3)
+# -------------------------------------------------------------------------------
+st.divider()
+st.subheader("🔍 Problem type")
+
+detected_type, reason = detect_problem_type(target_series)
+
+problem_type = st.radio(
+    "Problem type",
+    options=PROBLEM_TYPES,
+    index=PROBLEM_TYPES.index(detected_type),
+    format_func=str.capitalize,
+    horizontal=True,
+    help="Detected automatically. Change it if the detection is wrong.",
+)
+
+st.info(f"Detected **{detected_type}** for **{target}** because {reason}.")
+
+target_values = target_series.dropna()
+
+if problem_type == "classification":
+    class_counts = target_values.value_counts()
+    n_classes = len(class_counts)
+    kind = "Binary" if n_classes == 2 else "Multiclass"
+
+    # Too many classes: probably an ID, free text, or a number stored as text
+    if n_classes > MAX_CLASSES:
+        st.error(
+            f"Too many classes for classification ({n_classes:,}; the limit is {MAX_CLASSES}). "
+            "This column looks like an ID or free text. If it holds numbers or times, "
+            "check their format. Otherwise, please choose another target column."
+        )
+        st.stop()
+
+    st.markdown(f"**{kind} classification**: the model will predict one of **{n_classes}** classes.")
+
+    rare_classes = class_counts[class_counts < MIN_ROWS_PER_CLASS]
+    if not rare_classes.empty:
+        st.warning(
+            f"{len(rare_classes)} class(es) have fewer than {MIN_ROWS_PER_CLASS} rows "
+            "and may cause errors during training."
+        )
+
+    smallest_share = class_counts.min() / class_counts.sum()
+    if smallest_share < IMBALANCE_THRESHOLD:
+        st.warning(
+            f"The classes are imbalanced: the smallest class covers only "
+            f"{format_share(smallest_share)} of rows. Accuracy alone may be misleading."
+        )
+
+    chart_title = "Class distribution"
+    if n_classes > TOP_CLASSES_IN_CHART:
+        chart_title += f" (top {TOP_CLASSES_IN_CHART})"
+    st.markdown(f"**{chart_title}**")
+    st.bar_chart(class_counts.head(TOP_CLASSES_IN_CHART))
+
+else:  # regression
+    if not pd.api.types.is_numeric_dtype(target_values) or pd.api.types.is_bool_dtype(target_values):
+        st.error("Regression needs a numeric target. Choose classification or another column.")
+        st.stop()
+
+    st.markdown("**Regression**: the model will predict a number.")
+
+    col_min, col_median, col_mean, col_max = st.columns(4)
+    
+    # Times were converted to seconds for the model; show them back as HH:MM:SS
+    is_time_target = target in converted_time_columns
+
+    def fmt(value: float) -> str:
+        return format_duration(value) if is_time_target else f"{value:,.2f}"
+
+    col_min, col_median, col_mean, col_max = st.columns(4)
+    col_min.metric("Min", fmt(target_values.min()))
+    col_median.metric("Median", fmt(target_values.median()))
+    col_mean.metric("Mean", fmt(target_values.mean()))
+    col_max.metric("Max", fmt(target_values.max()))
+
+    if is_time_target:
+        st.caption("Times are shown as HH:MM:SS; the model works with seconds.")
