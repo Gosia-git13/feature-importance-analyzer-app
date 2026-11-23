@@ -82,6 +82,7 @@ def load_csv(file_bytes: bytes) -> pd.DataFrame:
 
 def detect_problem_type(target: pd.Series) -> tuple[str, str]:
     """Guess whether predicting `target` is classification or regression.
+
     Returns the problem type and a short, human-readable reason.
     """
     values = target.dropna()
@@ -98,6 +99,21 @@ def detect_problem_type(target: pd.Series) -> tuple[str, str]:
         return "classification", f"it has only {n_unique} distinct whole-number values"
 
     return "regression", f"it has many ({n_unique:,}) distinct numeric values"
+
+
+def format_share(share: float) -> str:
+    """Format a fraction as a percentage; show '<0.1%' instead of a misleading '0.0%'."""
+    if 0 < share < 0.001:
+        return "<0.1%"
+    return f"{share:.1%}"
+
+
+def format_duration(seconds: float) -> str:
+    """Format a number of seconds as HH:MM:SS, e.g. 3899 -> '01:04:59'."""
+    seconds = int(round(seconds))
+    hours, rest = divmod(seconds, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 # -------------------------------------------------------------------------------
@@ -126,10 +142,6 @@ if df.empty:
     st.stop()
 
 df, converted_time_columns = convert_time_columns(df)
-
-# -------------------------------------------------------------------------------
-# Main flow
-# -------------------------------------------------------------------------------
 
 
 # -------------------------------------------------------------------------------
@@ -202,8 +214,8 @@ if n_unique < 2:
 
 if n_missing > 0:
     st.warning(
-        f"Rows without a target value: {n_missing:,} ({n_missing / len(df):.1%}). "
-        "They will be removed before model training."
+        f"Rows without a target value: {n_missing:,} ({format_share(n_missing / len(df))}). "
+    "They will be removed before model training."
     )
 
 feature_columns = [col for col in df.columns if col != target]
@@ -240,14 +252,16 @@ if problem_type == "classification":
     n_classes = len(class_counts)
     kind = "Binary" if n_classes == 2 else "Multiclass"
 
-    st.markdown(f"**{kind} classification**: the model will predict one of **{n_classes}** classes.")
-
-    # Looks like an ID or free text: almost every row has its own "class"
-    if n_classes > 50 and n_classes / len(target_values) > 0.5:
-        st.warning(
-            "Almost every row has a different value. This column looks like an ID "
-            "or free text and is probably not a good target."
+    # Too many classes: probably an ID, free text, or a number stored as text
+    if n_classes > MAX_CLASSES:
+        st.error(
+            f"Too many classes for classification ({n_classes:,}; the limit is {MAX_CLASSES}). "
+            "This column looks like an ID or free text. If it holds numbers or times, "
+            "check their format. Otherwise, please choose another target column."
         )
+        st.stop()
+
+    st.markdown(f"**{kind} classification**: the model will predict one of **{n_classes}** classes.")
 
     rare_classes = class_counts[class_counts < MIN_ROWS_PER_CLASS]
     if not rare_classes.empty:
@@ -260,7 +274,7 @@ if problem_type == "classification":
     if smallest_share < IMBALANCE_THRESHOLD:
         st.warning(
             f"The classes are imbalanced: the smallest class covers only "
-            f"{smallest_share:.1%} of rows. Accuracy alone may be misleading."
+            f"{format_share(smallest_share)} of rows. Accuracy alone may be misleading."
         )
 
     chart_title = "Class distribution"
@@ -277,7 +291,18 @@ else:  # regression
     st.markdown("**Regression**: the model will predict a number.")
 
     col_min, col_median, col_mean, col_max = st.columns(4)
-    col_min.metric("Min", f"{target_values.min():,.2f}")
-    col_median.metric("Median", f"{target_values.median():,.2f}")
-    col_mean.metric("Mean", f"{target_values.mean():,.2f}")
-    col_max.metric("Max", f"{target_values.max():,.2f}")
+    
+    # Times were converted to seconds for the model; show them back as HH:MM:SS
+    is_time_target = target in converted_time_columns
+
+    def fmt(value: float) -> str:
+        return format_duration(value) if is_time_target else f"{value:,.2f}"
+
+    col_min, col_median, col_mean, col_max = st.columns(4)
+    col_min.metric("Min", fmt(target_values.min()))
+    col_median.metric("Median", fmt(target_values.median()))
+    col_mean.metric("Mean", fmt(target_values.mean()))
+    col_max.metric("Max", fmt(target_values.max()))
+
+    if is_time_target:
+        st.caption("Times are shown as HH:MM:SS; the model works with seconds.")
