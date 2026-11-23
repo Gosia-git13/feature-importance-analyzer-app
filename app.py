@@ -4,6 +4,7 @@ import io
 import pandas as pd
 import streamlit as st
 
+
 # -------------------------------------------------------------------------------
 # Page settings
 # -------------------------------------------------------------------------------
@@ -16,6 +17,14 @@ PREVIEW_ROWS = 10
 # "utf-8-sig" reads normal UTF-8 and also UTF-8 files saved by Excel (with a BOM);
 # "latin-1" is a fallback for older European files.
 ENCODINGS = ("utf-8-sig", "latin-1")
+
+# Problem type detection (v3)
+PROBLEM_TYPES = ["classification", "regression"]
+CLASSIFICATION_MAX_UNIQUE = 20  # whole numbers with <= 20 distinct values -> classes
+TOP_CLASSES_IN_CHART = 20
+MIN_ROWS_PER_CLASS = 2          # model training needs at least 2 examples per class
+IMBALANCE_THRESHOLD = 0.05      # smallest class below 5% of rows -> imbalanced
+
 
 # -------------------------------------------------------------------------------
 # Helpers
@@ -37,6 +46,27 @@ def load_csv(file_bytes: bytes) -> pd.DataFrame:
         except UnicodeDecodeError:
             continue  # if wrong encoding try the next one
     raise ValueError("Could not decode the file. Please save it as UTF-8.")
+
+
+def detect_problem_type(target: pd.Series) -> tuple[str, str]:
+    """Guess whether predicting `target` is classification or regression.
+    Returns the problem type and a short, human-readable reason.
+    """
+    values = target.dropna()
+    n_unique = values.nunique()
+
+    # bool must be checked first: pandas treats True/False as numbers too
+    if pd.api.types.is_bool_dtype(values) or not pd.api.types.is_numeric_dtype(values):
+        return "classification", "it contains text or yes/no values"
+
+    if (values % 1 != 0).any():
+        return "regression", "it contains decimal numbers"
+
+    if n_unique <= CLASSIFICATION_MAX_UNIQUE:
+        return "classification", f"it has only {n_unique} distinct whole-number values"
+
+    return "regression", f"it has many ({n_unique:,}) distinct numeric values"
+
 
 # -------------------------------------------------------------------------------
 # Load data
@@ -63,9 +93,11 @@ if df.empty:
     st.warning("The file has no data records to display.")
     st.stop()
 
+
 # -------------------------------------------------------------------------------
 # Main flow
 # -------------------------------------------------------------------------------
+
 
 # -------------------------------------------------------------------------------
 # Data preview (v1)
@@ -78,6 +110,7 @@ col_cols.metric("Columns", df.shape[1])
 
 st.subheader(f"Preview: first {PREVIEW_ROWS} rows")
 st.dataframe(df.head(PREVIEW_ROWS), use_container_width=True, hide_index=True)
+
 
 # -------------------------------------------------------------------------------
 # Target column selection (v2)
@@ -132,3 +165,72 @@ st.success(f"Target: **{target}** · Features: **{len(feature_columns)}** column
 
 with st.expander("Show feature columns"):
     st.write(", ".join(feature_columns))
+
+
+# -------------------------------------------------------------------------------
+# Problem type: classification or regression (v3)
+# -------------------------------------------------------------------------------
+st.divider()
+st.subheader("🔍 Problem type")
+
+detected_type, reason = detect_problem_type(target_series)
+
+problem_type = st.radio(
+    "Problem type",
+    options=PROBLEM_TYPES,
+    index=PROBLEM_TYPES.index(detected_type),
+    format_func=str.capitalize,
+    horizontal=True,
+    help="Detected automatically. Change it if the detection is wrong.",
+)
+
+st.info(f"Detected **{detected_type}** for **{target}** because {reason}.")
+
+target_values = target_series.dropna()
+
+if problem_type == "classification":
+    class_counts = target_values.value_counts()
+    n_classes = len(class_counts)
+    kind = "Binary" if n_classes == 2 else "Multiclass"
+
+    st.markdown(f"**{kind} classification**: the model will predict one of **{n_classes}** classes.")
+
+    # Looks like an ID or free text: almost every row has its own "class"
+    if n_classes > 50 and n_classes / len(target_values) > 0.5:
+        st.warning(
+            "Almost every row has a different value. This column looks like an ID "
+            "or free text and is probably not a good target."
+        )
+
+    rare_classes = class_counts[class_counts < MIN_ROWS_PER_CLASS]
+    if not rare_classes.empty:
+        st.warning(
+            f"{len(rare_classes)} class(es) have fewer than {MIN_ROWS_PER_CLASS} rows "
+            "and may cause errors during training."
+        )
+
+    smallest_share = class_counts.min() / class_counts.sum()
+    if smallest_share < IMBALANCE_THRESHOLD:
+        st.warning(
+            f"The classes are imbalanced: the smallest class covers only "
+            f"{smallest_share:.1%} of rows. Accuracy alone may be misleading."
+        )
+
+    chart_title = "Class distribution"
+    if n_classes > TOP_CLASSES_IN_CHART:
+        chart_title += f" (top {TOP_CLASSES_IN_CHART})"
+    st.markdown(f"**{chart_title}**")
+    st.bar_chart(class_counts.head(TOP_CLASSES_IN_CHART))
+
+else:  # regression
+    if not pd.api.types.is_numeric_dtype(target_values) or pd.api.types.is_bool_dtype(target_values):
+        st.error("Regression needs a numeric target. Choose classification or another column.")
+        st.stop()
+
+    st.markdown("**Regression**: the model will predict a number.")
+
+    col_min, col_median, col_mean, col_max = st.columns(4)
+    col_min.metric("Min", f"{target_values.min():,.2f}")
+    col_median.metric("Median", f"{target_values.median():,.2f}")
+    col_mean.metric("Mean", f"{target_values.mean():,.2f}")
+    col_max.metric("Max", f"{target_values.max():,.2f}")
