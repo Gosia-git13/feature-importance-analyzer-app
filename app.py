@@ -1,9 +1,17 @@
 import csv
-import io
 
 import pandas as pd
 import streamlit as st
 
+from src.data_loading import convert_time_columns, load_csv
+from src.formatting import format_duration, format_share
+from src.problem_type import (
+    IMBALANCE_THRESHOLD,
+    MAX_CLASSES,
+    MIN_ROWS_PER_CLASS,
+    PROBLEM_TYPES,
+    detect_problem_type,
+)
 
 # -------------------------------------------------------------------------------
 # Page settings
@@ -14,106 +22,7 @@ st.title("📊 :blue[Feature Importance] :grey[Analyzer]")
 st.caption("Upload a CSV file to discover which features matter most.")
 
 PREVIEW_ROWS = 10
-
-TIME_PATTERN = r"^\d{1,2}:\d{2}:\d{2}$"  # HH:MM:SS, e.g. 01:04:59
-TIME_MATCH_SHARE = 0.9  # >= 90% of values must look like a time
-
-# "utf-8-sig" reads normal UTF-8 and also UTF-8 files saved by Excel (with a BOM);
-# "latin-1" is a fallback for older European files.
-ENCODINGS = ("utf-8-sig", "latin-1")
-
-# Problem type detection (v3)
-PROBLEM_TYPES = ["classification", "regression"]
-CLASSIFICATION_MAX_UNIQUE = 20  # whole numbers with <= 20 distinct values -> classes
 TOP_CLASSES_IN_CHART = 20
-MIN_ROWS_PER_CLASS = 2          # model training needs at least 2 examples per class
-IMBALANCE_THRESHOLD = 0.05      # smallest class below 5% of rows -> imbalanced
-MAX_CLASSES = 50
-
-
-# -------------------------------------------------------------------------------
-# Helpers
-# -------------------------------------------------------------------------------
-@st.cache_data(show_spinner="Checking column types...")
-def convert_time_columns(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
-    """Convert text columns that look like HH:MM:SS into seconds.
-
-    Returns the converted DataFrame and a dict:
-    {column name: number of values that could not be converted, e.g. "DNF"}.
-    """
-    df = df.copy()
-    converted = {}
-
-    for col in df.select_dtypes(include="object").columns:
-        values = df[col].dropna().astype(str).str.strip() # pyright: ignore[reportAttributeAccessIssue]
-        if values.empty:
-            continue
-
-        share_matching = values.str.match(TIME_PATTERN).mean()
-        if share_matching < TIME_MATCH_SHARE:
-            continue  # not a time column
-
-        missing_before = df[col].isna().sum()
-        df[col] = pd.to_timedelta(df[col], errors="coerce").dt.total_seconds()
-        converted[col] = int(df[col].isna().sum() - missing_before)
-
-    return df, converted
-
-
-@st.cache_data(show_spinner="Reading file...")
-def load_csv(file_bytes: bytes) -> pd.DataFrame:
-    """Read CSV bytes into a DataFrame.
-
-    - detects the column separator automatically (comma, semicolon, tab...)
-    - tries UTF-8 first, then falls back to Latin-1
-    """
-    for encoding in ENCODINGS:
-        try:
-            return pd.read_csv(
-                io.BytesIO(file_bytes),
-                sep=None,          # pandas to detect the separator
-                engine="python",
-                encoding=encoding,
-            )
-        except UnicodeDecodeError:
-            continue  # if wrong encoding try the next one
-    raise ValueError("Could not decode the file. Please save it as UTF-8.")
-
-
-def detect_problem_type(target: pd.Series) -> tuple[str, str]:
-    """Guess whether predicting `target` is classification or regression.
-
-    Returns the problem type and a short, human-readable reason.
-    """
-    values = target.dropna()
-    n_unique = values.nunique()
-
-    # bool must be checked first: pandas treats True/False as numbers too
-    if pd.api.types.is_bool_dtype(values) or not pd.api.types.is_numeric_dtype(values):
-        return "classification", "it contains text or yes/no values"
-
-    if (values % 1 != 0).any():
-        return "regression", "it contains decimal numbers"
-
-    if n_unique <= CLASSIFICATION_MAX_UNIQUE:
-        return "classification", f"it has only {n_unique} distinct whole-number values"
-
-    return "regression", f"it has many ({n_unique:,}) distinct numeric values"
-
-
-def format_share(share: float) -> str:
-    """Format a fraction as a percentage; show '<0.1%' instead of a misleading '0.0%'."""
-    if 0 < share < 0.001:
-        return "<0.1%"
-    return f"{share:.1%}"
-
-
-def format_duration(seconds: float) -> str:
-    """Format a number of seconds as HH:MM:SS, e.g. 3899 -> '01:04:59'."""
-    seconds = int(round(seconds))
-    hours, rest = divmod(seconds, 3600)
-    minutes, secs = divmod(rest, 60)
-    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
 # -------------------------------------------------------------------------------
@@ -215,7 +124,7 @@ if n_unique < 2:
 if n_missing > 0:
     st.warning(
         f"Rows without a target value: {n_missing:,} ({format_share(n_missing / len(df))}). "
-    "They will be removed before model training."
+        "They will be removed before model training."
     )
 
 feature_columns = [col for col in df.columns if col != target]
@@ -290,8 +199,6 @@ else:  # regression
 
     st.markdown("**Regression**: the model will predict a number.")
 
-    col_min, col_median, col_mean, col_max = st.columns(4)
-    
     # Times were converted to seconds for the model; show them back as HH:MM:SS
     is_time_target = target in converted_time_columns
 
