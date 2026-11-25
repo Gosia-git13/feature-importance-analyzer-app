@@ -5,6 +5,14 @@ import streamlit as st
 
 from src.data_loading import convert_time_columns, load_csv
 from src.formatting import format_duration, format_share
+from src.modeling import (
+    MAX_TRAIN_ROWS,
+    assess_model_quality,
+    choose_sort_metric,
+    prepare_training_data,
+    suggest_columns_to_ignore,
+    train_best_model,
+)
 from src.problem_type import (
     IMBALANCE_THRESHOLD,
     MAX_CLASSES,
@@ -213,3 +221,101 @@ else:  # regression
 
     if is_time_target:
         st.caption("Times are shown as HH:MM:SS; the model works with seconds.")
+
+
+# -------------------------------------------------------------------------------
+# Model training (v4)
+# -------------------------------------------------------------------------------
+st.divider()
+st.subheader("🤖 Train the model")
+
+# --- 1. Choose features ---------------------------------------------------------
+ignored_columns = st.multiselect(
+    "Columns to ignore",
+    options=feature_columns,
+    default=suggest_columns_to_ignore(df, target),
+    help=(
+        "Pre-selected: empty columns and text columns where most values are unique "
+        "(e.g. names, IDs). Also add columns that 'give away the answer', "
+        "e.g. finishing place when predicting finishing time."
+    ),
+)
+
+used_features = [col for col in feature_columns if col not in ignored_columns]
+if not used_features:
+    st.error("All feature columns are ignored. Keep at least one feature.")
+    st.stop()
+
+# --- 2. Prepare data and choose the ranking metric ------------------------------
+train_df, was_sampled = prepare_training_data(df, target, used_features)
+if was_sampled:
+    st.caption(f"Large file: training on a random sample of {MAX_TRAIN_ROWS:,} rows to keep it fast.")
+
+sort_metric, metric_reason = choose_sort_metric(train_df[target], problem_type)
+
+st.markdown(
+    f"Training on **{len(train_df):,}** rows with **{len(used_features)}** features. "
+    f"Models will be ranked by **{sort_metric}** ({metric_reason})."
+)
+
+# --- 3. Train (only when the button is clicked) ---------------------------------
+# Results are kept in session_state, because Streamlit reruns the whole script
+# after every click. The key detects when inputs changed and old results are stale.
+run_key = (hash(file_bytes), target, problem_type, tuple(used_features))
+
+results = st.session_state.get("model_results")
+if results is not None and results["key"] != run_key:
+    results = None
+
+if st.button("🚀 Train and compare models", type="primary"):
+    with st.spinner(f"Training and comparing {problem_type} models... this can take a few minutes."):
+        try:
+            experiment, best_model, leaderboard = train_best_model(
+                train_df, target, problem_type, sort_metric
+            )
+        except Exception as err:  # PyCaret can fail for many data-specific reasons
+            st.error(f"Training failed: {err}")
+            st.stop()
+
+    results = {
+        "key": run_key,
+        "experiment": experiment,
+        "best_model": best_model,
+        "leaderboard": leaderboard,
+        "sort_metric": sort_metric,
+    }
+    st.session_state["model_results"] = results
+
+if results is None:
+    st.info("👆 Click the button to train and compare models.")
+    st.stop()
+
+# --- 4. Show results ------------------------------------------------------------
+leaderboard = results["leaderboard"]
+best_row = leaderboard.iloc[0]
+best_score = float(best_row[results["sort_metric"]])
+
+st.success(f"Best model: **{best_row['Model']}**")
+
+col_score, col_extra = st.columns(2)
+col_score.metric(f"{results['sort_metric']} (cross-validation)", f"{best_score:.3f}")
+
+if problem_type == "regression":
+    mae = float(best_row["MAE"])
+    mae_text = format_duration(mae) if target in converted_time_columns else f"{mae:,.2f}"
+    col_extra.metric("MAE: average error", mae_text)
+else:
+    other_metric = "F1" if results["sort_metric"] == "Accuracy" else "Accuracy"
+    col_extra.metric(other_metric, f"{float(best_row[other_metric]):.3f}")
+
+quality, quality_note = assess_model_quality(best_score)
+if quality == "good":
+    st.success(f"Model quality: **{quality}**. {quality_note}")
+elif quality == "moderate":
+    st.info(f"Model quality: **{quality}**. {quality_note}")
+else:
+    st.warning(f"Model quality: **{quality}**. {quality_note}")
+
+with st.expander("Compare all models"):
+    st.caption("Average scores from cross-validation. TT (Sec) = training time in seconds.")
+    st.dataframe(leaderboard, use_container_width=True, hide_index=True)
