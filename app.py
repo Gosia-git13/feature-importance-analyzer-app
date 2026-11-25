@@ -1,10 +1,12 @@
 import csv
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
 from src.data_loading import convert_time_columns, load_csv
 from src.formatting import format_duration, format_share
+from src.importance import permutation_importance_by_column
 from src.modeling import (
     MAX_TRAIN_ROWS,
     assess_model_quality,
@@ -31,6 +33,8 @@ st.caption("Upload a CSV file to discover which features matter most.")
 
 PREVIEW_ROWS = 10
 TOP_CLASSES_IN_CHART = 20
+TOP_FEATURES_IN_CHART = 15
+DOMINANT_FEATURE_SHARE = 0.8  # one feature above 80% of total importance
 
 
 # -------------------------------------------------------------------------------
@@ -277,12 +281,20 @@ if st.button("🚀 Train and compare models", type="primary"):
             st.error(f"Training failed: {err}")
             st.stop()
 
+    # Computed once here (not on every rerun), because it takes a few seconds
+    with st.spinner("Measuring feature importance..."):
+        test_score, importance = permutation_importance_by_column(
+            experiment, best_model, sort_metric
+        )
+
     results = {
         "key": run_key,
         "experiment": experiment,
         "best_model": best_model,
         "leaderboard": leaderboard,
         "sort_metric": sort_metric,
+        "test_score": test_score,
+        "importance": importance,
     }
     st.session_state["model_results"] = results
 
@@ -309,7 +321,9 @@ else:
     col_extra.metric(other_metric, f"{float(best_row[other_metric]):.3f}")
 
 quality, quality_note = assess_model_quality(best_score)
-if quality == "good":
+if quality == "suspicious":
+    st.warning(f"⚠️ Model quality: **too good to be true**. {quality_note}")
+elif quality == "good":
     st.success(f"Model quality: **{quality}**. {quality_note}")
 elif quality == "moderate":
     st.info(f"Model quality: **{quality}**. {quality_note}")
@@ -319,3 +333,81 @@ else:
 with st.expander("Compare all models"):
     st.caption("Average scores from cross-validation. TT (Sec) = training time in seconds.")
     st.dataframe(leaderboard, use_container_width=True, hide_index=True)
+
+
+# -------------------------------------------------------------------------------
+# Most important features (v5)
+# -------------------------------------------------------------------------------
+st.divider()
+st.subheader("⭐ Most important features")
+
+metric = results["sort_metric"]
+importance = results["importance"]
+n_test_rows = len(results["experiment"].get_config("X_test"))
+
+st.caption(
+    f"Permutation importance: how much the model's **{metric}** drops when the values "
+    f"of one feature are randomly shuffled. A bigger drop means a more important feature. "
+    f"Measured on {n_test_rows:,} test rows the model did not see during training "
+    f"(test {metric}: {results['test_score']:.3f})."
+)
+
+top_features = importance.head(TOP_FEATURES_IN_CHART)
+
+# Altair instead of st.bar_chart: it can sort bars by value (st.bar_chart sorts by name)
+chart = (
+    alt.Chart(top_features)
+    .mark_bar()
+    .encode(
+        x=alt.X("importance:Q", title=f"Drop in {metric}"),
+        y=alt.Y("feature:N", sort="-x", title=None),
+        tooltip=[
+            alt.Tooltip("feature:N", title="Feature"),
+            alt.Tooltip("importance:Q", title=f"Drop in {metric}", format=".3f"),
+            alt.Tooltip("share:Q", title="Share of importance", format=".1%"),
+        ],
+    )
+)
+st.altair_chart(chart, use_container_width=True)
+
+if len(importance) > TOP_FEATURES_IN_CHART:
+    st.caption(f"Showing the top {TOP_FEATURES_IN_CHART} of {len(importance)} features.")
+
+# Short summary of the ranking
+top_row = importance.iloc[0]
+st.markdown(
+    f"The most important feature is **{top_row['feature']}** "
+    f"({format_share(top_row['share'])} of total importance)."
+)
+
+if top_row["share"] > DOMINANT_FEATURE_SHARE:
+    st.info(
+        f"**{top_row['feature']}** dominates the model. If this column is just another "
+        "form of the target (e.g. finishing place vs. finishing time), consider ignoring it "
+        "and training again."
+    )
+
+no_effect = importance[importance["importance"] <= 0]["feature"].tolist()
+if no_effect:
+    st.caption(f"No measurable effect: {', '.join(no_effect)}.")
+
+with st.expander("Show all features"):
+    table = importance.rename(
+        columns={
+            "feature": "Feature",
+            "importance": f"Drop in {metric}",
+            "std": "Std (between shuffles)",
+            "share": "Share of importance",
+        }
+    )
+    st.dataframe(
+        table.style.format(
+            {
+                f"Drop in {metric}": "{:.4f}",
+                "Std (between shuffles)": "{:.4f}",
+                "Share of importance": "{:.1%}",
+            }
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )

@@ -10,6 +10,7 @@ RANDOM_SEED = 123             # same seed -> same results every run
 CV_FOLDS = 5                  # cross-validation folds (fewer = faster)
 MAX_TRAIN_ROWS = 20_000       # larger files are sampled to keep training fast
 ID_LIKE_UNIQUE_SHARE = 0.5    # text column with > 50% unique values -> probably names/IDs
+SUSPICIOUS_SCORE = 0.99       # an almost perfect score usually means data leakage
 
 # Only models that can report feature importance (needed for the feature chart)
 CLASSIFICATION_MODELS = ["lr", "ridge", "lda", "dt", "rf", "et", "gbc", "ada", "lightgbm"]
@@ -97,6 +98,13 @@ def train_best_model(data: pd.DataFrame, target: str, problem_type: str, sort_me
 
 def assess_model_quality(score: float) -> tuple[str, str]:
     """Rough, human-readable quality of a 0-1 score (R2, Accuracy, F1)."""
+    if score >= SUSPICIOUS_SCORE:
+        return "suspicious", (
+            "The score is almost perfect, which is rare with real data. This often means "
+            "that a feature 'gives away the answer' (data leakage). "
+            "Check the most important features below, add the "
+            "suspicious one to 'Columns to ignore' and train again."
+        )
     if score >= 0.8:
         return "good", "Feature importance should be reliable."
     if score >= 0.5:
