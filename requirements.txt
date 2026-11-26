@@ -9,3 +9,4 @@ altair==5.5.0
 matplotlib==3.7.3
 openai==1.107.1
 python-dotenv==1.2.4
+six==1.17.0
