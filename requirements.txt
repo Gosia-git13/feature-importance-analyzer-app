@@ -5,6 +5,7 @@ numpy==1.26.4
 pyarrow==16.1.0
 streamlit==1.43.2
 protobuf==5.29.6
+altair==5.5.0
+matplotlib==3.7.3
 openai==1.107.1
 python-dotenv==1.2.4
-matplotlib==3.7.3
