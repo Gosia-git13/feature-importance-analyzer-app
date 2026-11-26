@@ -5,6 +5,14 @@ import pandas as pd
 import streamlit as st
 
 from src.data_loading import convert_time_columns, load_csv
+from src.ai_report import (
+    OPENAI_MODEL,
+    AIReportError,
+    build_payload,
+    generate_ai_report,
+    get_key_from_env_file,
+    render_importance_chart,
+)
 from src.description import DOMINANT_FEATURE_SHARE, build_description
 from src.formatting import format_duration, format_share
 from src.importance import permutation_importance_by_column
@@ -446,3 +454,59 @@ description = build_description(
 
 with st.container(border=True):
     st.markdown(description)
+
+
+# -------------------------------------------------------------------------------
+# Extended AI report: image-to-text with the user's own OpenAI key (v6b, optional)
+# -------------------------------------------------------------------------------
+st.markdown("#### ✨ Extended AI report (optional)")
+
+with st.expander("Let AI analyse the feature importance chart and write a report"):
+    st.caption(
+        f"The model **{OPENAI_MODEL}** looks at an image of the feature importance chart "
+        "together with the summary above, and writes a business-style report. "
+        "Only the chart and the summary are sent to OpenAI, never the rows of your data. "
+        "A report usually costs around one cent or less."
+    )
+
+    # A key in a local .env file is convenient for testing; users enter their own key
+    env_key = get_key_from_env_file()
+    if env_key:
+        api_key = env_key
+        st.caption("🔑 Using the API key from your local .env file.")
+    else:
+        api_key = st.text_input(
+            "Your OpenAI API key",
+            type="password",  # hides the key on screen
+            placeholder="sk-...",
+            help="Used only for this request. It is not saved anywhere.",
+        )
+
+    if st.button("✨ Generate AI report", disabled=not api_key):
+        chart_png = render_importance_chart(importance, metric)
+        payload = build_payload(
+            description=description,
+            importance=importance,
+            ignored_columns=ignored_columns,
+        )
+        with st.spinner("The AI is analysing the chart..."):
+            try:
+                ai_text = generate_ai_report(api_key, payload, chart_png)
+            except AIReportError as err:
+                st.error(str(err))
+            else:
+                # Keep the report after reruns, tied to the current results
+                st.session_state["ai_report"] = {
+                    "key": run_key,
+                    "text": ai_text,
+                    "chart": chart_png,
+                }
+
+    ai_report = st.session_state.get("ai_report")
+    if ai_report is not None and ai_report["key"] == run_key:
+        with st.container(border=True):
+            st.markdown(ai_report["text"])
+        st.image(ai_report["chart"], caption="The chart that was sent to the AI", width=500)
+        st.caption(
+            "Written by AI: it can make mistakes. Check key numbers against the results above."
+        )

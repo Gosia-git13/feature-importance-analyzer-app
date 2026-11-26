@@ -1,3 +1,6 @@
+# secrets
+.env
+
 # śmieci systemowe i Pythona
 .DS_Store
 __pycache__/
