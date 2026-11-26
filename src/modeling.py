@@ -96,8 +96,14 @@ def train_best_model(data: pd.DataFrame, target: str, problem_type: str, sort_me
     return experiment, best_model, leaderboard
 
 
-def assess_model_quality(score: float) -> tuple[str, str]:
-    """Rough, human-readable quality of a 0-1 score (R2, Accuracy, F1)."""
+def assess_model_quality(
+    score: float, metric: str, baseline_accuracy: float | None = None
+) -> tuple[str, str]:
+    """Rough, human-readable quality of a 0-1 score (R2, Accuracy, F1).
+
+    For Accuracy, the score is first compared with always guessing the most common
+    class, because a model only as good as guessing has learned nothing.
+    """
     if score >= SUSPICIOUS_SCORE:
         return "suspicious", (
             "The score is almost perfect, which is rare with real data. This often means "
@@ -105,6 +111,11 @@ def assess_model_quality(score: float) -> tuple[str, str]:
             "Check the most important features below, add the "
             "suspicious one to 'Columns to ignore' and train again."
         )
+
+    # Improvement over guessing: 0 = no better than guessing, 1 = perfect
+    if metric == "Accuracy" and baseline_accuracy is not None:
+        score = (score - baseline_accuracy) / (1 - baseline_accuracy)
+
     if score >= 0.8:
         return "good", "Feature importance should be reliable."
     if score >= 0.5:
