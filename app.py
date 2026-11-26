@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from src.data_loading import convert_time_columns, load_csv
+from src.description import DOMINANT_FEATURE_SHARE, build_description
 from src.formatting import format_duration, format_share
 from src.importance import permutation_importance_by_column
 from src.modeling import (
@@ -34,7 +35,6 @@ st.caption("Upload a CSV file to discover which features matter most.")
 PREVIEW_ROWS = 10
 TOP_CLASSES_IN_CHART = 20
 TOP_FEATURES_IN_CHART = 15
-DOMINANT_FEATURE_SHARE = 0.8  # one feature above 80% of total importance
 
 
 # -------------------------------------------------------------------------------
@@ -312,6 +312,7 @@ st.success(f"Best model: **{best_row['Model']}**")
 col_score, col_extra = st.columns(2)
 col_score.metric(f"{results['sort_metric']} (cross-validation)", f"{best_score:.3f}")
 
+mae_text = None
 if problem_type == "regression":
     mae = float(best_row["MAE"])
     mae_text = format_duration(mae) if target in converted_time_columns else f"{mae:,.2f}"
@@ -320,7 +321,13 @@ else:
     other_metric = "F1" if results["sort_metric"] == "Accuracy" else "Accuracy"
     col_extra.metric(other_metric, f"{float(best_row[other_metric]):.3f}")
 
-quality, quality_note = assess_model_quality(best_score)
+baseline_accuracy = (
+    train_df[target].value_counts(normalize=True).max()
+    if problem_type == "classification"
+    else None
+)
+
+quality, quality_note = assess_model_quality(best_score, results["sort_metric"], baseline_accuracy)
 if quality == "suspicious":
     st.warning(f"⚠️ Model quality: **too good to be true**. {quality_note}")
 elif quality == "good":
@@ -411,3 +418,31 @@ with st.expander("Show all features"):
         use_container_width=True,
         hide_index=True,
     )
+
+
+# -------------------------------------------------------------------------------
+# Summary in plain language (v6)
+# -------------------------------------------------------------------------------
+st.divider()
+st.subheader("📝 Summary")
+
+target_in_training = train_df[target]
+description = build_description(
+    target=target,
+    problem_type=problem_type,
+    n_rows=len(train_df),
+    n_features=len(used_features),
+    n_models=len(leaderboard),
+    best_model_name=best_row["Model"],
+    metric=metric,
+    score=best_score,
+    quality=quality,
+    quality_note=quality_note,
+    importance=importance,
+    mae_text=mae_text,
+    n_classes=target_in_training.nunique() if problem_type == "classification" else None,
+    baseline_accuracy=baseline_accuracy,
+)
+
+with st.container(border=True):
+    st.markdown(description)

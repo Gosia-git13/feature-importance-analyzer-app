@@ -8,12 +8,21 @@ from src.modeling import RANDOM_SEED
 
 N_REPEATS = 5  # how many times each column is shuffled (more = more stable, but slower)
 
-# Same metrics as used to rank models. F1 uses the "weighted" average,
-# so it works for both binary and multiclass targets.
+def f1_like_pycaret(y_true, y_pred) -> float:
+    """F1 computed the same way as in PyCaret's model ranking.
+
+    - binary target: F1 of the positive (usually rare) class
+    - multiclass target: average of all classes, weighted by their size
+    """
+    average = "binary" if len(np.unique(y_true)) == 2 else "weighted"
+    return float(f1_score(y_true, y_pred, average=average))
+
+
+# Same metrics as used to rank models
 METRIC_SCORERS = {
     "R2": r2_score,
     "Accuracy": accuracy_score,
-    "F1": lambda y_true, y_pred: f1_score(y_true, y_pred, average="weighted"),
+    "F1": f1_like_pycaret,
 }
 
 
