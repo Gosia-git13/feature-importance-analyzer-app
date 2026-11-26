@@ -4,7 +4,7 @@ import pandas as pd
 PROBLEM_TYPES = ["classification", "regression"]
 CLASSIFICATION_MAX_UNIQUE = 20  # whole numbers with <= 20 distinct values -> classes
 MIN_ROWS_PER_CLASS = 2          # model training needs at least 2 examples per class
-IMBALANCE_THRESHOLD = 0.05      # smallest class below 5% of rows -> imbalanced
+IMBALANCE_THRESHOLD = 0.2       # smallest class below 20% of rows -> imbalanced
 MAX_CLASSES = 50                # more classes makes no sense in this app
 
 
