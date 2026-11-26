@@ -8,7 +8,8 @@ from src.problem_type import IMBALANCE_THRESHOLD
 
 RANDOM_SEED = 123             # same seed -> same results every run
 CV_FOLDS = 5                  # cross-validation folds (fewer = faster)
-MAX_TRAIN_ROWS = 20_000       # larger files are sampled to keep training fast
+MAX_TRAIN_ROWS = 5_000        # larger files are sampled to keep training fast and light
+N_JOBS = 1                    # 1 = no parallel processes; saves memory on small servers
 ID_LIKE_UNIQUE_SHARE = 0.5    # text column with > 50% unique values -> probably names/IDs
 SUSPICIOUS_SCORE = 0.99       # an almost perfect score usually means data leakage
 
@@ -88,6 +89,7 @@ def train_best_model(data: pd.DataFrame, target: str, problem_type: str, sort_me
         target=target,
         session_id=RANDOM_SEED,
         fold=CV_FOLDS,
+        n_jobs=N_JOBS,
         verbose=False,
         html=False,
     )
