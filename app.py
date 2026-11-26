@@ -461,6 +461,12 @@ with st.container(border=True):
 # -------------------------------------------------------------------------------
 st.markdown("#### ✨ Extended AI report (optional)")
 
+# Close the panel whenever new results appear (new file, target or features),
+# so the toggle in the browser and its state on the server always agree
+if st.session_state.get("ai_panel_run_key") != run_key:
+    st.session_state["ai_panel_run_key"] = run_key
+    st.session_state["show_ai_panel"] = False
+
 # A toggle (not an expander): its state is kept in session_state, so the panel
 # stays open after every rerun (typing the key, clicking buttons, downloading)
 show_ai_panel = st.toggle(
@@ -527,4 +533,3 @@ if show_ai_panel:
                 file_name=f"ai_report_{target}.md",
                 mime="text/markdown",
             )
-   
